@@ -167,8 +167,15 @@ export async function readSheetContacts(accessToken?: string, sheetId?: string):
     const linkedinLink = linkedinIdx !== -1 ? row[linkedinIdx]?.trim() || "" : ""
     const role = roleIdx !== -1 ? row[roleIdx]?.trim() || "" : ""
 
-    if (email) {
-      contacts.push({ name, organization, email, linkedinLink, role })
+    // Accept row if it has a name, email, or organization — never silently drop a lead
+    const hasEmail = !!email
+    const hasName = !!name
+    const hasOrg = !!organization
+    
+    if (hasEmail || hasName || hasOrg) {
+      // If email is missing, generate a placeholder so the lead still appears
+      const safeEmail = hasEmail ? email : `no-email-${i}-${(name || organization || "unknown").toLowerCase().replace(/\s+/g, "-")}@imported.local`
+      contacts.push({ name: name || "Unknown", organization, email: safeEmail, linkedinLink, role })
     }
   }
 

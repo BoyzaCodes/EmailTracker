@@ -88,99 +88,54 @@ export async function POST(req: Request) {
       }
 
       // B. Upsert into leads table for visibility in CRM Pipeline UI
-      // Parse Name into First and Last Name
       const nameParts = c.name.trim().split(/\s+/)
       const firstName = nameParts[0] || "Imported"
       const lastName = nameParts.slice(1).join(" ") || "Prospect"
 
-      // Check if lead with this email already exists in leads table
-      const { data: existingLeads, error: checkErr } = await supabase
+      const upsertData: any = {
+        email: c.email,
+        first_name: firstName,
+        last_name: lastName,
+        company: c.organization || "Imported Org",
+        updated_at: new Date().toISOString()
+      }
+
+      if (c.linkedinLink) {
+        upsertData.linkedin_link = c.linkedinLink
+      }
+      if (c.role) {
+        upsertData.role = c.role
+      }
+
+      const { error: upsertErr } = await supabase
         .from("leads")
-        .select("id")
-        .eq("email", c.email)
-        .limit(1)
+        .upsert(upsertData, { onConflict: "email" });
 
-      if (!checkErr && existingLeads && existingLeads.length > 0) {
-        // Update existing lead details
-        const updateData: any = {
-          first_name: firstName,
-          last_name: lastName,
-          company: c.organization || "Imported Org",
-          updated_at: new Date().toISOString()
-        }
-
-        if (c.linkedinLink) {
-          updateData.linkedin_link = c.linkedinLink
-        }
-        if (c.role) {
-          updateData.role = c.role
-        }
-
-        let { error: updateErr } = await supabase
-          .from("leads")
-          .update(updateData)
-          .eq("id", existingLeads[0].id)
-
-        if (updateErr) {
-          console.error(`[Sheets Sync] Failed to update lead ${c.email}:`, updateErr.message)
-          
-          // Retry without linkedin_link if it is a schema issue
-          if (updateErr.message.toLowerCase().includes("linkedin_link") || updateErr.message.toLowerCase().includes("schema cache")) {
-            console.log(`[Sheets Sync] Retrying update for lead ${c.email} without 'linkedin_link'...`)
-            const fallbackUpdate = { ...updateData }
-            delete fallbackUpdate.linkedin_link
-            
-            const { error: retryErr } = await supabase
-              .from("leads")
-              .update(fallbackUpdate)
-              .eq("id", existingLeads[0].id)
-
-            if (!retryErr) {
-              updatedCount++
+      if (upsertErr) {
+        console.error(`[Sheets Sync] Failed to upsert lead ${c.email}:`, upsertErr.message);
+        // Retry without linkedin_link if schema issue
+        if (upsertErr.message.toLowerCase().includes("linkedin_link") || upsertErr.message.toLowerCase().includes("schema cache")) {
+          console.log(`[Sheets Sync] Retrying upsert for lead ${c.email} without 'linkedin_link'...`);
+          const fallbackUpsert = { ...upsertData };
+          delete fallbackUpsert.linkedin_link;
+          const { error: retryErr } = await supabase
+            .from("leads")
+            .upsert(fallbackUpsert, { onConflict: "email" });
+          if (!retryErr) {
+            const { data: existing } = await supabase.from("leads").select("id").eq("email", c.email).single();
+            if (existing) {
+              updatedCount++;
+            } else {
+              addedCount++;
             }
           }
-        } else {
-          updatedCount++
         }
       } else {
-        // Create new lead as prospect
-        const insertData: any = {
-          first_name: firstName,
-          last_name: lastName,
-          email: c.email,
-          company: c.organization || "Imported Org",
-          role: c.role || "Prospect",
-          status: "prospect",
-          notes: "Imported via Google Sheets sync."
-        }
-
-        if (c.linkedinLink) {
-          insertData.linkedin_link = c.linkedinLink
-        }
-
-        let { error: insertErr } = await supabase
-          .from("leads")
-          .insert(insertData)
-
-        if (insertErr) {
-          console.error(`[Sheets Sync] Failed to insert lead ${c.email}:`, insertErr.message)
-          
-          // Retry without linkedin_link if it is a schema issue
-          if (insertErr.message.toLowerCase().includes("linkedin_link") || insertErr.message.toLowerCase().includes("schema cache")) {
-            console.log(`[Sheets Sync] Retrying insert for lead ${c.email} without 'linkedin_link'...`)
-            const fallbackInsert = { ...insertData }
-            delete fallbackInsert.linkedin_link
-            
-            const { error: retryErr } = await supabase
-              .from("leads")
-              .insert(fallbackInsert)
-
-            if (!retryErr) {
-              addedCount++
-            }
-          }
+        const { data: existingLead } = await supabase.from("leads").select("id").eq("email", c.email).single();
+        if (existingLead) {
+          updatedCount++;
         } else {
-          addedCount++
+          addedCount++;
         }
       }
     }
